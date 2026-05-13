@@ -3,8 +3,9 @@ from streamlit_gsheets import GSheetsConnection
 import warnings
 import os
 import datetime
+import gc # Garbage Collector para evitar paragens por memória cheia
 
-# --- INSTALAÇÃO FORÇADA DO NAVEGADOR NA CLOUD ---
+# --- INSTALAÇÃO FORÇADA NA CLOUD ---
 os.system("playwright install chromium")
 
 import socket
@@ -66,7 +67,7 @@ def salvar_envio_gsheets(dominio, email, user, df_atual):
         conn.update(spreadsheet=URL_FOLHA, worksheet="Enviados", data=df_final)
         return df_final
     except Exception:
-        st.toast(f"⚠️ Google Sheets ocupada. O email para {dominio} foi enviado, mas o registo pode ter falhado.")
+        st.toast(f"⚠️ Erro ao registar {dominio} no Sheets. Email seguiu!")
         return df_atual
 
 def salvar_cache_lote_gsheets(lista_novos_caches, df_atual):
@@ -79,7 +80,7 @@ def salvar_cache_lote_gsheets(lista_novos_caches, df_atual):
         conn.update(spreadsheet=URL_FOLHA, worksheet="Cache", data=df_final)
         return df_final
     except Exception:
-        st.toast("⚠️ Falha ao guardar lote no Cache. A pesquisa continua na RAM.")
+        st.toast("⚠️ Falha ao guardar lote no Cache.")
         return df_atual
 
 # ==========================================
@@ -88,22 +89,32 @@ def salvar_cache_lote_gsheets(lista_novos_caches, df_atual):
 def investigar_site(dominio):
     url = 'https://' + dominio if not dominio.startswith('http') else dominio
     resultado = "N/A"
+    browser = None
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            # Upgrade Ninja: Bloqueia media para não estoirar a RAM
+            # Launch com argumentos de estabilidade para evitar silent stops
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            page = context.new_page()
+            
+            # Bloqueio de recursos pesados
             page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
             
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.goto(url, timeout=35000, wait_until="domcontentloaded")
             time.sleep(3)
             html = page.content()
+            
             emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', html)
             emails_limpos = list(set([e.lower() for e in emails if dominio.split('.')[0] in e.lower() or 'gmail' in e.lower() or 'contact' in e.lower() or 'info' in e.lower()]))
+            
             if emails_limpos:
                 resultado = ", ".join(emails_limpos[:2])
+            
             browser.close()
-    except: pass
+    except Exception:
+        if browser: browser.close()
+    finally:
+        gc.collect() # Limpeza forçada da memória RAM
     return resultado
 
 def validar_email_smtp(email):
@@ -166,46 +177,41 @@ if iniciar and alvos:
     st.info("🔄 Sincronizando com a Base de Dados Central...")
     df_env, df_cac = get_db_data()
     
-    # --- FASE 1: SCRAPE EM LOTE (CHECKPOINTS DE 75 EM 75) ---
-    st.subheader("🔎 Fase 1: Scrapping (Cache c/ Checkpoints)")
+    # --- FASE 1: SCRAPE EM LOTE (75 EM 75) ---
+    st.subheader("🔎 Fase 1: Scrapping (Cache Ativo)")
     prog_s = st.progress(0)
     log_s = st.empty()
     
     cache_dict = dict(zip(df_cac['Dominio'], df_cac['Emails_Encontrados'])) if not df_cac.empty else {}
     dados_scraped = []
     novos_para_cache = [] 
-    
-    TAMANHO_LOTE = 75 # Configurado para 75 como pediste
+    TAMANHO_LOTE = 75
     
     for i, dom in enumerate(alvos):
         if dom in cache_dict:
-            log_s.text(f"⚡ Recuperado do Cache: {dom}")
+            log_s.text(f"⚡ Cache: {dom}")
             dados_scraped.append({"Domínio": dom, "Emails_Site": cache_dict[dom]})
         else:
             log_s.text(f"🌐 Investigando: {dom}...")
             em = investigar_site(dom)
             dados_scraped.append({"Domínio": dom, "Emails_Site": em})
-            
             novos_para_cache.append({"Dominio": dom, "Emails_Encontrados": em})
             cache_dict[dom] = em
             
-            # Checkpoint de 75
             if len(novos_para_cache) >= TAMANHO_LOTE:
-                log_s.info(f"📦 A guardar checkpoint de {TAMANHO_LOTE} sites na Google Sheet...")
+                log_s.info(f"📦 Checkpoint: {TAMANHO_LOTE} sites...")
                 df_cac = salvar_cache_lote_gsheets(novos_para_cache, df_cac)
                 novos_para_cache = [] 
                 
         prog_s.progress((i + 1) / len(alvos))
         
-    # Salva o que sobrar no fim do loop
     if novos_para_cache:
-        log_s.info(f"📦 A guardar os últimos {len(novos_para_cache)} sites na Google Sheet...")
         df_cac = salvar_cache_lote_gsheets(novos_para_cache, df_cac)
         
-    log_s.success("✅ Scrape concluído e Cache atualizado!")
+    log_s.success("✅ Scrape concluído!")
     
     # --- FASE 2: VALIDAÇÃO ---
-    st.subheader("🛡️ Fase 2: Validação SMTP")
+    st.subheader("🛡️ Fase 2: Validação")
     dados_val = []
     for l in dados_scraped:
         em = l["Emails_Site"]
@@ -226,11 +232,10 @@ if iniciar and alvos:
         email_to = linha['Emails_Site'].split(',')[0].strip()
         empresa = dom.replace('www.', '').split('.')[0].capitalize()
         
-        # Filtro de repetição
         ja_enviado_por_MIM = not df_env.empty and not df_env[(df_env['Dominio'] == dom) & (df_env['Enviado_Por'] == user_name)].empty
         
         if ja_enviado_por_MIM and not allow_personal_repeat:
-            log_e.warning(f"⏭️ {dom} ignorado: Tu já contactaste este domínio.")
+            log_e.warning(f"⏭️ Ignorado: {dom} (Já enviado por ti)")
         else:
             try:
                 msg = MIMEMultipart()
@@ -245,15 +250,21 @@ if iniciar and alvos:
                 server.sendmail(email_remetente, [email_to, email_bcc], msg.as_string())
                 server.quit()
                 
-                # Registo individual na folha
                 df_env = salvar_envio_gsheets(dom, email_to, user_name, df_env)
                 log_e.success(f"✅ Enviado: {dom}")
             except Exception as e:
                 log_e.error(f"❌ Erro em {dom}: {e}")
         
         prog_e.progress((idx + 1) / total)
-        if idx < total - 1: time.sleep(random.randint(pausa_min, pausa_max))
+        
+        # --- TIMER VISUAL ANTI-FREEZE ---
+        if idx < total - 1:
+            t_espera = random.randint(int(pausa_min), int(pausa_max))
+            timer_box = st.empty()
+            for seg in range(t_espera, 0, -1):
+                timer_box.metric("Próximo envio em:", f"{seg}s", f"Faltam {total - (idx+1)} sites")
+                time.sleep(1)
+            timer_box.empty()
 
     st.balloons()
-    st.success("🏁 Processo concluído com sucesso!")
-    
+    st.success("🏁 Campanha Finalizada!")
