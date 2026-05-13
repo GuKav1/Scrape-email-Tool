@@ -54,6 +54,7 @@ def investigar_site(dominio):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             time.sleep(3)
             html = page.content()
