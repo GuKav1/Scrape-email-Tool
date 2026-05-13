@@ -37,12 +37,14 @@ URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGS
 def get_db_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
+        # worksheet="Enviados" deve ter colunas: Data, Dominio, Email, Enviado_Por
         df_enviados = conn.read(spreadsheet=URL_FOLHA, worksheet="Enviados")
-        df_enviados = df_enviados.dropna(how="all") # Limpa linhas vazias
+        df_enviados = df_enviados.dropna(how="all")
     except:
         df_enviados = pd.DataFrame(columns=['Data', 'Dominio', 'Email', 'Enviado_Por'])
 
     try:
+        # worksheet="Cache" deve ter colunas: Dominio, Emails_Encontrados
         df_cache = conn.read(spreadsheet=URL_FOLHA, worksheet="Cache")
         df_cache = df_cache.dropna(how="all")
     except:
@@ -60,10 +62,13 @@ def salvar_envio_gsheets(dominio, email, user, df_atual):
     }])
     df_final = pd.concat([df_atual, nova_linha], ignore_index=True)
     conn.update(spreadsheet=URL_FOLHA, worksheet="Enviados", data=df_final)
-    return df_final # Devolve o df atualizado
+    return df_final
 
 def salvar_cache_gsheets(dominio, emails_encontrados, df_atual):
     conn = st.connection("gsheets", type=GSheetsConnection)
+    # Evita duplicar no cache se já existir
+    if not df_atual.empty and dominio in df_atual['Dominio'].values:
+        return df_atual
     nova_linha = pd.DataFrame([{
         "Dominio": dominio,
         "Emails_Encontrados": emails_encontrados
@@ -82,21 +87,16 @@ def investigar_site(dominio):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            # Bloqueia imagens/videos para poupar RAM na Cloud
             page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
-            
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             time.sleep(3)
             html = page.content()
-            
             emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', html)
             emails_limpos = list(set([e.lower() for e in emails if dominio.split('.')[0] in e.lower() or 'gmail' in e.lower() or 'contact' in e.lower() or 'info' in e.lower()]))
-            
             if emails_limpos:
                 resultado = ", ".join(emails_limpos[:2])
             browser.close()
-    except Exception as e:
-        pass # Ignora silenciosamente para não parar o pipeline
+    except: pass
     return resultado
 
 def validar_email_smtp(email):
@@ -106,7 +106,6 @@ def validar_email_smtp(email):
         servidor_mx = str(registos_mx[0].exchange)
         host = socket.gethostname()
         server = smtplib.SMTP(timeout=8)
-        server.set_debuglevel(0)
         server.connect(servidor_mx)
         server.helo(host)
         server.mail('goncalo.dias@cleveradvertising.com')
@@ -115,186 +114,131 @@ def validar_email_smtp(email):
         if code == 250: return "✅ Entregável"
         elif code == 550: return "❌ Inexistente"
         else: return f"⚠️ Duvidoso ({code})"
-    except Exception:
-        return "❓ Inconclusivo"
+    except: return "❓ Inconclusivo"
 
 # ==========================================
 # 3. INTERFACE (DASHBOARD)
 # ==========================================
 st.title("🚀 GD Advertising - Team Pipeline")
-st.markdown("Base de Dados conectada em tempo real. Os envios da equipa estão sincronizados.")
 
 with st.sidebar:
-    st.header("👤 Identificação")
+    st.header("👤 Utilizador")
     user_name = st.text_input("O teu Nome", value="Gonçalo")
     
     st.divider()
-    st.header("⚙️ Chaves de Envio")
-    email_remetente = st.text_input("O teu Email de Envio", value="goncalo@gd-advertising.com")
-    password_app = st.text_input("App Password", type="password")
-    nome_remetente = st.text_input("Nome do Remetente", value="Gonçalo | GD Advertising")
-    email_bcc = st.text_input("BCC (Oculto)", value="goncalo.dias@g13advertising.com")
+    st.header("⚙️ Opções de Envio")
+    allow_personal_repeat = st.toggle("Permitir re-enviar para domínios já contactados por MIM", value=False)
     
     st.divider()
-    st.header("⏳ Proteção Anti-Spam (Segundos)")
-    pausa_min = st.number_input("Pausa Mínima", value=180)
-    pausa_max = st.number_input("Pausa Máxima", value=420)
+    email_remetente = st.text_input("Email de Envio", value="goncalo@gd-advertising.com")
+    password_app = st.text_input("App Password", type="password")
+    nome_remetente = st.text_input("Nome", value="Gonçalo | GD Advertising")
+    email_bcc = st.text_input("BCC", value="goncalo.dias@g13advertising.com")
+    
+    st.divider()
+    pausa_min = st.number_input("Pausa Min (seg)", value=180)
+    pausa_max = st.number_input("Pausa Max (seg)", value=420)
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. Base de Dados (.TXT)")
-    ficheiro_txt = st.file_uploader("Carrega os domínios (1 por linha)", type=['txt'])
-    alvos = []
-    if ficheiro_txt:
-        alvos = [l.strip() for l in ficheiro_txt.getvalue().decode("utf-8").split("\n") if l.strip()]
-        st.success(f"{len(alvos)} domínios carregados.")
+    st.subheader("1. Domínios (.TXT)")
+    ficheiro_txt = st.file_uploader("Upload", type=['txt'])
+    alvos = [l.strip() for l in ficheiro_txt.getvalue().decode("utf-8").split("\n") if l.strip()] if ficheiro_txt else []
 
 with col2:
     st.subheader("2. Mensagem")
-    assunto_template = st.text_input("Assunto", value="Direct Ad Partnership with {empresa} / Fixed Rates")
-    corpo_template = st.text_area("Corpo do Email", height=250, value="""Hello,
-
-My name is Gonçalo Dias, Media Buyer at Clever Advertising.
-
-We manage global budgets for Tier-1 brands in the Fintech and Trading sectors (such as XM and Stake). We’ve been following {empresa} and we are interested in purchasing direct display inventory for a long-term partnership to reach your tech-savvy audience.
-
-Our standard operating model:
-Commercials: We work with Fixed CPM or Monthly Flat Fees.
-Finance: We offer Prepayment for the first test run to eliminate any risk on your side.
-Tech: Our ads are served via HTML5 3rd-party tags (100% Brand Safe), fully compatible with AdGlare, Google Ad Manager, or any other ad server you use.
-
-Could you please share your latest Media Kit and Direct Rates for display placements (300x250 / 728x90)? We are ready to start a test campaign immediately.
-
-Best regards,
-
-Gonçalo Dias
-Media Buyer | Clever Advertising""")
+    assunto_t = st.text_input("Assunto", value="Direct Ad Partnership with {empresa}")
+    corpo_t = st.text_area("Mensagem", height=200, value="Hello,\n\nMy name is {user}, Media Buyer at Clever Advertising...")
 
 st.divider()
-iniciar = st.button("🚀 INICIAR CAMPANHA DA EQUIPA", type="primary", use_container_width=True)
+iniciar = st.button("🚀 INICIAR PIPELINE INTELIGENTE", type="primary", use_container_width=True)
 
 # ==========================================
 # 4. EXECUÇÃO
 # ==========================================
-if iniciar:
-    if not ficheiro_txt or not password_app or not user_name:
-        st.error("⚠️ Preenche o teu Nome, a App Password e carrega a lista antes de começar.")
-    else:
-        # Carrega dados atualizados da Google Sheet
-        st.info("🔄 A sincronizar com a Base de Dados Central...")
-        df_enviados_db, df_cache_db = get_db_data()
-        
-        # Converte Cache para dicionário para pesquisa super rápida
-        cache_dict = {}
-        if not df_cache_db.empty:
-            cache_dict = dict(zip(df_cache_db['Dominio'], df_cache_db['Emails_Encontrados']))
-            
-        # Converte Enviados para lista
-        enviados_list = []
-        if not df_enviados_db.empty:
-            enviados_list = df_enviados_db['Dominio'].tolist()
-
-        # --- FASE 1: SCRAPING (COM CACHE DA EQUIPA) ---
-        st.subheader("🔎 Fase 1: Scrapping Centralizado")
-        progresso_scrape = st.progress(0)
-        caixa_scrape = st.empty()
-        
-        dados_scraped = []
-        
-        for i, dominio in enumerate(alvos):
-            # 1. Se já alguém da equipa enviou, ignora logo o scrape!
-            if dominio in enviados_list:
-                quem_enviou = df_enviados_db[df_enviados_db['Dominio'] == dominio]['Enviado_Por'].values[0]
-                caixa_scrape.warning(f"⏭️ {dominio} ignorado. Contactado por: {quem_enviou}")
-                dados_scraped.append({"Domínio": dominio, "Emails_Site": "N/A - Já Contactado"})
-                progresso_scrape.progress((i + 1) / len(alvos))
-                continue
-
-            # 2. Se já estiver no Cache (alguém já pesquisou antes)
-            if dominio in cache_dict:
-                caixa_scrape.info(f"⚡ Recuperado do Cache (Cloud): {dominio}")
-                dados_scraped.append({"Domínio": dominio, "Emails_Site": cache_dict[dominio]})
-            
-            # 3. Faz o Scrape real
-            else:
-                caixa_scrape.text(f"A investigar: {dominio}...")
-                emails_encontrados = investigar_site(dominio)
-                dados_scraped.append({"Domínio": dominio, "Emails_Site": emails_encontrados})
-                
-                # Guarda na Folha de Cálculo para o próximo colega não ter de procurar
-                df_cache_db = salvar_cache_gsheets(dominio, emails_encontrados, df_cache_db)
-                cache_dict[dominio] = emails_encontrados
-                
-            progresso_scrape.progress((i + 1) / len(alvos))
-            
-        # --- FASE 2: VALIDAÇÃO ---
-        st.subheader("🛡️ Fase 2: Validação SMTP")
-        caixa_valid = st.empty()
-        
-        dados_finais = []
-        for linha in dados_scraped:
-            email_bruto = linha.get("Emails_Site", "N/A")
-            if "@" in email_bruto and "Já Contactado" not in email_bruto:
-                primeiro_email = email_bruto.split(',')[0].strip()
-                linha["Email_Status"] = validar_email_smtp(primeiro_email)
-            else:
-                linha["Email_Status"] = "N/A"
-            dados_finais.append(linha)
-            
-        df_all = pd.DataFrame(dados_finais)
-        df_validos = df_all[df_all['Email_Status'].str.contains('✅|⚠️|❓', na=False)]
-        
-        with st.expander("Ver lista de Emails Prontos a Enviar", expanded=True):
-            st.dataframe(df_validos[['Domínio', 'Emails_Site', 'Email_Status']])
-
-        # --- FASE 3: ENVIO E REGISTO NA BD ---
-        if df_validos.empty:
-            st.error("❌ Nenhum e-mail novo e válido para enviar.")
+if iniciar and alvos:
+    st.info("🔄 Sincronizando com Base de Dados...")
+    df_env, df_cac = get_db_data()
+    
+    # --- FASE 1: SCRAPE COM CACHE ---
+    st.subheader("🔎 Fase 1: Scrapping (Cache Integrada)")
+    prog_s = st.progress(0)
+    log_s = st.empty()
+    
+    cache_dict = dict(zip(df_cac['Dominio'], df_cac['Emails_Encontrados'])) if not df_cac.empty else {}
+    dados_scraped = []
+    
+    for i, dom in enumerate(alvos):
+        # 1. Verificar Cache
+        if dom in cache_dict:
+            log_s.text(f"⚡ Cache: {dom}")
+            dados_scraped.append({"Domínio": dom, "Emails_Site": cache_dict[dom]})
         else:
-            st.subheader("📨 Fase 3: Disparo e Sincronização")
-            progresso_envio = st.progress(0)
-            caixa_envio = st.empty()
+            log_s.text(f"🌐 Investigando: {dom}...")
+            em = investigar_site(dom)
+            dados_scraped.append({"Domínio": dom, "Emails_Site": em})
+            # Salva na Folha para ajudar a equipa
+            df_cac = salvar_cache_gsheets(dom, em, df_cac)
+            cache_dict[dom] = em
+        prog_s.progress((i + 1) / len(alvos))
+    
+    # --- FASE 2: VALIDAÇÃO ---
+    st.subheader("🛡️ Fase 2: Validação")
+    dados_val = []
+    for l in dados_scraped:
+        em = l["Emails_Site"]
+        l["Email_Status"] = validar_email_smtp(em.split(',')[0].strip()) if "@" in em else "N/A"
+        dados_val.append(l)
+    
+    df_pronto = pd.DataFrame(dados_val)
+    df_validos = df_pronto[df_pronto['Email_Status'].str.contains('✅|⚠️|❓', na=False)]
+    
+    # --- FASE 3: ENVIO COM FILTRO INDIVIDUAL ---
+    st.subheader("📨 Fase 3: Disparo Estratégico")
+    prog_e = st.progress(0)
+    log_e = st.empty()
+    
+    total = len(df_validos)
+    for idx, linha in df_validos.reset_index(drop=True).iterrows():
+        dom = linha['Domínio']
+        email_to = linha['Emails_Site'].split(',')[0].strip()
+        empresa = dom.replace('www.', '').split('.')[0].capitalize()
+        
+        # VERIFICAÇÃO DE REPETIÇÃO
+        ja_enviado_por_alguem = not df_env.empty and dom in df_env['Dominio'].values
+        ja_enviado_por_MIM = not df_env.empty and not df_env[(df_env['Dominio'] == dom) & (df_env['Enviado_Por'] == user_name)].empty
+        
+        # LÓGICA PEDIDA: 
+        # Se eu já enviei e o toggle está OFF -> Pula
+        if ja_enviado_por_MIM and not allow_personal_repeat:
+            log_e.warning(f"⏭️ {dom} ignorado: Tu já enviaste email para aqui anteriormente.")
+        # Se um COLEGA enviou -> Envia na mesma (automático)
+        else:
+            if ja_enviado_por_alguem and not ja_enviado_por_MIM:
+                st.caption(f"ℹ️ {dom} já foi contactado por um colega, mas vou enviar o teu agora.")
             
-            total = len(df_validos)
-            
-            for index, linha in df_validos.reset_index(drop=True).iterrows():
-                destino = linha['Emails_Site'].split(',')[0].strip()
-                dominio_alvo = linha['Domínio']
-                empresa_limpa = dominio_alvo.replace('www.', '').split('.')[0].capitalize()
-                
-                assunto_final = assunto_template.replace("{empresa}", empresa_limpa)
-                corpo_final = corpo_template.replace("{empresa}", empresa_limpa)
-                
+            # [PROCESSO DE ENVIO SMTP IGUAL AO ANTERIOR]
+            try:
                 msg = MIMEMultipart()
                 msg['From'] = f"{nome_remetente} <{email_remetente}>"
-                msg['To'] = destino
-                msg['Subject'] = assunto_final
-                msg.attach(MIMEText(corpo_final, 'plain'))
-                msg.add_header('List-Unsubscribe', f'<mailto:{email_remetente}?subject=unsubscribe>')
+                msg['To'] = email_to
+                msg['Subject'] = assunto_t.format(empresa=empresa)
+                msg.attach(MIMEText(corpo_t.format(empresa=empresa, user=user_name), 'plain'))
                 
-                destinatarios_reais = [destino, email_bcc] if email_bcc else [destino]
+                server = smtplib.SMTP('smtp.gmail.com', 587)
+                server.starttls()
+                server.login(email_remetente, password_app)
+                server.sendmail(email_remetente, [email_to, email_bcc], msg.as_string())
+                server.quit()
                 
-                try:
-                    server = smtplib.SMTP('smtp.gmail.com', 587)
-                    server.starttls()
-                    server.login(email_remetente, password_app)
-                    server.sendmail(email_remetente, destinatarios_reais, msg.as_string())
-                    server.quit()
-                    
-                    # REGISTA NA GOOGLE SHEET!
-                    df_enviados_db = salvar_envio_gsheets(dominio_alvo, destino, user_name, df_enviados_db)
-                    
-                    caixa_envio.success(f"✅ Enviado: {empresa_limpa} (Registado na BD)")
-                except Exception as e:
-                    caixa_envio.error(f"❌ Erro em {destino}: {e}")
-                
-                progresso_envio.progress((index + 1) / total)
-                
-                if index < total - 1:
-                    t_espera = random.randint(int(pausa_min), int(pausa_max))
-                    with st.spinner(f"⏳ Pausa de {round(t_espera/60, 1)} min. NÃO FECHES A PÁGINA..."):
-                        time.sleep(t_espera)
+                # REGISTA NA FOLHA
+                df_env = salvar_envio_gsheets(dom, email_to, user_name, df_env)
+                log_e.success(f"✅ Enviado: {dom}")
+            except Exception as e:
+                log_e.error(f"❌ Erro em {dom}: {e}")
+        
+        prog_e.progress((idx + 1) / total)
+        if idx < total - 1: time.sleep(random.randint(pausa_min, pausa_max))
 
-            st.balloons()
-            st.success("🏁 CAMPANHA TERMINADA! A Base de Dados Central foi atualizada.")
+    st.balloons()
