@@ -1,0 +1,8 @@
+streamlit
+pandas
+openpyxl
+requests
+beautifulsoup4
+dnspython
+whois
+playwright
