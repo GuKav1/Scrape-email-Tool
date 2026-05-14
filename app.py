@@ -20,28 +20,32 @@ from playwright.sync_api import sync_playwright
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# --- CONFIGS DE ESTABILIDADE ---
+# --- CONFIGURAÇÕES DE ESTABILIDADE ---
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
-st.set_page_config(page_title="GD Advertising Stable Pipeline", page_icon="🛡️", layout="wide")
 
+st.set_page_config(page_title="GD Stable Pro", page_icon="🛡️", layout="wide")
+
+# URL DA TUA BASE DE DADOS
 URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGSoefJ6-rtIwHHjabU/edit?usp=sharing"
 
 # ==========================================
-# 1. FUNÇÕES DE DB
+# 1. PERSISTÊNCIA DE SESSÃO (ANTI-REFRESH)
+# ==========================================
+if 'running' not in st.session_state:
+    st.session_state.running = False
+if 'bloco_atual' not in st.session_state:
+    st.session_state.bloco_atual = 0
+
+# ==========================================
+# 2. FUNÇÕES DE BASE DE DADOS
 # ==========================================
 def get_db_data():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        try:
-            df_env = conn.read(spreadsheet=URL_FOLHA, worksheet="Enviados", ttl=0).dropna(how="all")
-        except:
-            df_env = pd.DataFrame(columns=['Data', 'Dominio', 'Email', 'Enviado_Por'])
-        try:
-            df_cac = conn.read(spreadsheet=URL_FOLHA, worksheet="Cache", ttl=0).dropna(how="all")
-        except:
-            df_cac = pd.DataFrame(columns=['Dominio', 'Emails_Encontrados'])
+        df_env = conn.read(spreadsheet=URL_FOLHA, worksheet="Enviados", ttl=0).dropna(how="all")
+        df_cac = conn.read(spreadsheet=URL_FOLHA, worksheet="Cache", ttl=0).dropna(how="all")
         return df_env, df_cac
     except:
         return pd.DataFrame(columns=['Data', 'Dominio', 'Email', 'Enviado_Por']), pd.DataFrame(columns=['Dominio', 'Emails_Encontrados'])
@@ -68,21 +72,16 @@ def salvar_cache_lote_gsheets(lista_novos_caches, df_atual):
         return df_atual
 
 # ==========================================
-# 2. MOTOR ULTRA-LEVE
+# 3. MOTOR DE SCRAPE (OTIMIZADO)
 # ==========================================
 def investigar_site(dominio):
     url = 'https://' + dominio if not dominio.startswith('http') else dominio
     resultado = "N/A"
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=[
-                "--no-sandbox", 
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process"
-            ])
-            context = browser.new_context(user_agent="Mozilla/5.0")
-            page = context.new_page()
+            # Lançamento ultra-leve para não estoirar a RAM da Cloud
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--single-process"])
+            page = browser.new_page(user_agent="Mozilla/5.0")
             page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
             
             try:
@@ -93,18 +92,15 @@ def investigar_site(dominio):
                 emails_limpos = list(set([e.lower() for e in emails if dominio.split('.')[0] in e.lower() or 'gmail' in e.lower() or 'contact' in e.lower() or 'info' in e.lower()]))
                 if emails_limpos:
                     resultado = ", ".join(emails_limpos[:2])
-            except:
-                pass
-    except:
-        pass
-    finally:
-        gc.collect()
+            except: pass
+            browser.close()
+    except: pass
+    finally: gc.collect()
     return str(resultado)
 
 def validar_email_smtp(email):
     try:
         email_str = str(email)
-        if "@" not in email_str: return "❌"
         dom = email_str.split('@')[1]
         mx = dns.resolver.resolve(dom, 'MX')
         server = smtplib.SMTP(timeout=5)
@@ -117,7 +113,7 @@ def validar_email_smtp(email):
     except: return "❓"
 
 # ==========================================
-# 3. INTERFACE
+# 4. INTERFACE
 # ==========================================
 with st.sidebar:
     st.header("👤 Perfil")
@@ -126,112 +122,102 @@ with st.sidebar:
     pass_app = st.text_input("App Password", type="password")
     
     st.divider()
-    st.header("⏳ Pausas de Segurança")
-    pausa_min = st.number_input("Entre E-mails Min (seg)", value=180)
-    pausa_max = st.number_input("Entre E-mails Max (seg)", value=420)
+    pausa_min = st.number_input("Pausa E-mails Min", value=180)
+    pausa_max = st.number_input("Pausa E-mails Max", value=420)
     
     st.divider()
-    usar_pausa_bloco = st.toggle("Ativar pausa entre blocos", value=False)
-    tempo_bloco_seg = st.number_input("Segundos de pausa entre blocos", value=600, disabled=not usar_pausa_bloco)
-    
-    st.divider()
-    tamanho_bloco = st.slider("Tamanho do Bloco", 10, 100, 30)
+    usar_pausa_bloco = st.toggle("Pausa entre blocos", value=True)
+    tempo_bloco_seg = st.number_input("Segundos", value=600)
+    tamanho_bloco = st.slider("Tamanho do Bloco", 10, 50, 30)
 
-st.title("🛡️ GD Advertising Stable Pipeline")
-col1, col2 = st.columns(2)
+st.title("🛡️ GD Advertising - Stable Pro Pipeline")
 
-with col1:
-    txt = st.file_uploader("Upload domínios (.txt)", type=['txt'])
-    alvos_total = [l.strip() for l in txt.getvalue().decode("utf-8").split("\n") if l.strip()] if txt else []
+txt = st.file_uploader("Upload domínios (.txt)", type=['txt'])
+alvos_total = [l.strip() for l in txt.getvalue().decode("utf-8").split("\n") if l.strip()] if txt else []
 
-with col2:
+col_msg1, col_msg2 = st.columns(2)
+with col_msg1:
     assunto_t = st.text_input("Assunto", value="Partnership with {empresa}")
-    corpo_t = st.text_area("Mensagem", height=150, value="Hello {empresa}, I'm {user}...")
+with col_msg2:
+    corpo_t = st.text_area("Mensagem", value="Hello {empresa}, I'm {user}...")
 
 # ==========================================
-# 4. EXECUÇÃO
+# 5. EXECUÇÃO CASCATA COM SESSION STATE
 # ==========================================
-if st.button("🚀 INICIAR PIPELINE ESTÁVEL", type="primary", use_container_width=True) and alvos_total:
+if st.button("🚀 INICIAR PIPELINE", type="primary"):
+    st.session_state.running = True
+
+if st.session_state.running and alvos_total:
     blocos = [alvos_total[i:i + tamanho_bloco] for i in range(0, len(alvos_total), tamanho_bloco)]
-    st.info(f"📋 {len(alvos_total)} sites | {len(blocos)} blocos.")
     
-    for idx_b, bloco in enumerate(blocos):
-        st.subheader(f"📦 Processando Bloco {idx_b + 1} de {len(blocos)}")
+    for idx_b in range(st.session_state.bloco_atual, len(blocos)):
+        bloco = blocos[idx_b]
+        st.subheader(f"📦 Bloco {idx_b + 1} de {len(blocos)}")
         
+        # Sincronizar dados
         df_env, df_cac = get_db_data()
         cache_dict = dict(zip(df_cac['Dominio'], df_cac['Emails_Encontrados'])) if not df_cac.empty else {}
         
         dados_bloco = []
         novos_cac = []
         p_scrape = st.progress(0)
-        log_s = st.empty()
         
+        # SCRAPE
         for i, dom in enumerate(bloco):
             ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
-            
             if ja_enviado:
-                log_s.text(f"⏭️ {dom} já enviado. Pulando.")
+                st.write(f"⏭️ {dom} já enviado.")
             else:
                 if dom in cache_dict:
-                    log_s.text(f"⚡ Cache: {dom}")
                     dados_bloco.append({"Domínio": dom, "Email": str(cache_dict[dom])})
                 else:
-                    log_s.text(f"🌐 Scrapping: {dom}")
                     em = investigar_site(dom)
                     dados_bloco.append({"Domínio": dom, "Email": em})
                     novos_cac.append({"Dominio": dom, "Emails_Encontrados": em})
                     cache_dict[dom] = em
             p_scrape.progress((i + 1) / len(bloco))
         
+        # Salva Cache
         df_cac = salvar_cache_lote_gsheets(novos_cac, df_cac)
         
+        # ENVIOS
         enviar_estes = [d for d in dados_bloco if d.get("Email") and "@" in str(d["Email"])]
+        for idx_e, item in enumerate(enviar_estes):
+            dest = str(item["Email"]).split(',')[0].strip()
+            emp = item["Domínio"].replace('www.','').split('.')[0].capitalize()
+            
+            if validar_email_smtp(dest) == "✅":
+                try:
+                    msg = MIMEMultipart(); msg['From'] = email_rem; msg['To'] = dest
+                    msg['Subject'] = assunto_t.format(empresa=emp)
+                    msg.attach(MIMEText(corpo_t.format(empresa=emp, user=user_name), 'plain'))
+                    
+                    server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
+                    server.login(email_rem, pass_app); server.sendmail(email_rem, [dest], msg.as_string()); server.quit()
+                    
+                    df_env = salvar_envio_gsheets(item["Domínio"], dest, user_name, df_env)
+                    st.success(f"✅ Enviado: {item['Domínio']}")
+                except: st.error(f"❌ Erro em {dest}")
+            
+            if idx_e < len(enviar_estes) - 1:
+                t_esp = random.randint(pausa_min, pausa_max)
+                t_ui = st.empty()
+                for s in range(t_esp, 0, -1):
+                    t_ui.metric("Próximo envio em:", f"{s}s", f"Bloco {idx_b+1}")
+                    time.sleep(1)
+                t_ui.empty()
         
-        if enviar_estes:
-            st.write(f"📨 {len(enviar_estes)} e-mails para enviar no bloco.")
-            for idx_e, item in enumerate(enviar_estes):
-                dest = str(item["Email"]).split(',')[0].strip()
-                emp = item["Domínio"].replace('www.','').split('.')[0].capitalize()
-                
-                if validar_email_smtp(dest) == "✅":
-                    try:
-                        msg = MIMEMultipart()
-                        msg['From'] = email_rem
-                        msg['To'] = dest
-                        msg['Subject'] = assunto_t.format(empresa=emp)
-                        msg.attach(MIMEText(corpo_t.format(empresa=emp, user=user_name), 'plain'))
-                        
-                        server = smtplib.SMTP('smtp.gmail.com', 587)
-                        server.starttls()
-                        server.login(email_rem, pass_app)
-                        server.sendmail(email_rem, [dest], msg.as_string())
-                        server.quit()
-                        
-                        df_env = salvar_envio_gsheets(item["Domínio"], dest, user_name, df_env)
-                        st.success(f"✅ Enviado: {item['Domínio']}")
-                    except Exception as e:
-                        st.error(f"❌ Erro: {e}")
-                
-                if idx_e < len(enviar_estes) - 1:
-                    t_esp = random.randint(pausa_min, pausa_max)
-                    timer_ui = st.empty()
-                    for s in range(t_esp, 0, -1):
-                        timer_ui.metric("Próximo envio em:", f"{s}s", f"Bloco {idx_b+1}")
-                        time.sleep(1)
-                    timer_ui.empty()
+        # Atualiza o progresso da sessão
+        st.session_state.bloco_atual = idx_b + 1
         
-        st.write(f"✔️ Bloco {idx_b + 1} concluído.")
-        
-        # --- PAUSA OPCIONAL ENTRE BLOCOS ---
         if usar_pausa_bloco and idx_b < len(blocos) - 1:
-            st.warning(f"⏸️ Pausa estratégica entre blocos ativada...")
-            timer_bloco = st.empty()
+            t_b = st.empty()
             for s in range(int(tempo_bloco_seg), 0, -1):
-                timer_bloco.metric("Retomando pipeline em:", f"{s}s", "Resfriando servidor")
+                t_b.metric("Pausa entre blocos:", f"{s}s", "Resfriando...")
                 time.sleep(1)
-            timer_bloco.empty()
-            st.success("🚀 Retomando!")
-
+            t_b.empty()
+            
         gc.collect()
 
+    st.session_state.running = False
     st.balloons()
