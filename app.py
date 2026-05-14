@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
-st.set_page_config(page_title="GD Stable Pro + Logs", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="GD Turbo Pipeline", page_icon="🚀", layout="wide")
 
 URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGSoefJ6-rtIwHHjabU/edit?usp=sharing"
 
@@ -71,33 +71,68 @@ def salvar_cache_lote_gsheets(lista_novos_caches, df_atual):
         return df_atual
 
 # ==========================================
-# 3. MOTOR DE INVESTIGAÇÃO
+# 3. MOTOR TURBO (DEEP SCRAPING + REGEX AGRESSIVO)
 # ==========================================
 def investigar_site(dominio):
     url = 'https://' + dominio if not dominio.startswith('http') else dominio
-    resultado = "N/A"
+    emails_encontrados = set()
+    
+    # Regex agressivo para e-mails normais e ofuscados
+    regex_padrao = r'[a-zA-Z0-9_.+-]+(?:\s?\[at\]\s?|\s?\(at\)\s?|@)[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
+
+    def extrair_e_limpar(html_content):
+        raw = re.findall(regex_padrao, html_content)
+        limpos = []
+        for e in raw:
+            e_limpo = e.replace('[at]', '@').replace('(at)', '@').replace(' ', '').lower()
+            # Filtro básico de validade
+            if "@" in e_limpo and "." in e_limpo.split("@")[1]:
+                limpos.append(e_limpo)
+        return limpos
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--single-process"])
-            page = browser.new_page(user_agent="Mozilla/5.0")
-            page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
+            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            page = context.new_page()
+            
+            # Bloqueia recursos pesados
+            page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_())
+            
+            # PASSO 1: Tentar a Home
             try:
-                page.goto(url, timeout=25000, wait_until="commit")
+                page.goto(url, timeout=25000, wait_until="domcontentloaded")
                 time.sleep(2)
-                html = page.content()
-                emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', html)
-                emails_limpos = list(set([e.lower() for e in emails if dominio.split('.')[0] in e.lower() or 'gmail' in e.lower() or 'contact' in e.lower() or 'info' in e.lower()]))
-                if emails_limpos:
-                    resultado = ", ".join(emails_limpos[:2])
+                emails_encontrados.update(extrair_e_limpar(page.content()))
+                
+                # PASSO 2: Se vazio, procurar página de contacto
+                if not emails_encontrados:
+                    links = page.query_selector_all("a")
+                    target_url = None
+                    for link in links:
+                        try:
+                            href = link.get_attribute("href")
+                            texto = link.inner_text().lower() if link.inner_text() else ""
+                            if href and any(p in href.lower() or p in texto for p in ['contact', 'contato', 'about', 'sobre', 'legal', 'equipe', 'team']):
+                                target_url = href if href.startswith('http') else url.rstrip('/') + '/' + href.lstrip('/')
+                                break
+                        except: continue
+                    
+                    if target_url:
+                        page.goto(target_url, timeout=20000, wait_until="domcontentloaded")
+                        time.sleep(2)
+                        emails_encontrados.update(extrair_e_limpar(page.content()))
             except: pass
             browser.close()
     except: pass
     finally: gc.collect()
-    return str(resultado)
+    
+    return ", ".join(list(emails_encontrados)[:2]) if emails_encontrados else "N/A"
 
 def validar_email_smtp(email):
     try:
-        email_str = str(email)
+        email_str = str(email).split(',')[0].strip()
+        if "@" not in email_str: return "❌"
         dom = email_str.split('@')[1]
         mx = dns.resolver.resolve(dom, 'MX')
         server = smtplib.SMTP(timeout=5)
@@ -113,7 +148,7 @@ def validar_email_smtp(email):
 # 4. INTERFACE
 # ==========================================
 with st.sidebar:
-    st.header("👤 Perfil")
+    st.header("👤 Perfil GD")
     user_name = st.text_input("Teu Nome", value="Gonçalo")
     email_rem = st.text_input("Teu Email", value="goncalo@gd-advertising.com")
     pass_app = st.text_input("App Password", type="password")
@@ -127,7 +162,7 @@ with st.sidebar:
     tempo_bloco_seg = st.number_input("Segundos", value=600)
     tamanho_bloco = st.slider("Tamanho do Bloco", 10, 50, 30)
 
-st.title("🛡️ GD Advertising - Stable Pro Pipeline")
+st.title("🚀 GD Advertising - Turbo Pipeline")
 
 txt = st.file_uploader("Upload domínios (.txt)", type=['txt'])
 alvos_total = [l.strip() for l in txt.getvalue().decode("utf-8").split("\n") if l.strip()] if txt else []
@@ -139,42 +174,39 @@ with col_msg2:
     corpo_t = st.text_area("Mensagem", value="Hello {empresa}, I'm {user}...")
 
 # ==========================================
-# 5. EXECUÇÃO CASCATA
+# 5. EXECUÇÃO CASCATA TURBO
 # ==========================================
-if st.button("🚀 INICIAR PIPELINE", type="primary"):
+if st.button("🚀 INICIAR PIPELINE TURBO", type="primary", use_container_width=True):
     st.session_state.running = True
 
 if st.session_state.running and alvos_total:
     blocos = [alvos_total[i:i + tamanho_bloco] for i in range(0, len(alvos_total), tamanho_bloco)]
+    st.info(f"📋 {len(alvos_total)} sites | {len(blocos)} blocos.")
     
     for idx_b in range(st.session_state.bloco_atual, len(blocos)):
         bloco = blocos[idx_b]
-        st.markdown(f"### 📦 Processando Bloco {idx_b + 1} de {len(blocos)}")
+        st.markdown(f"### 📦 Bloco {idx_b + 1} de {len(blocos)}")
         
-        # Sincronizar dados
         df_env, df_cac = get_db_data()
         cache_dict = dict(zip(df_cac['Dominio'], df_cac['Emails_Encontrados'])) if not df_cac.empty else {}
         
         dados_bloco = []
         novos_cac = []
         
-        # --- UI DE STATUS ---
         barra_progresso = st.progress(0)
-        status_texto = st.empty() # AQUI É O LOG EM TEMPO REAL
+        status_texto = st.empty()
         
-        # SCRAPE
         for i, dom in enumerate(bloco):
-            # Verificar se já enviado por mim
             ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
             
             if ja_enviado:
-                status_texto.warning(f"⏭️ {dom} já enviado anteriormente. Ignorando...")
+                status_texto.warning(f"⏭️ {dom} já enviado por ti. Ignorando...")
             else:
                 if dom in cache_dict:
-                    status_texto.info(f"⚡ Recuperado do Cache: {dom}")
+                    status_texto.info(f"⚡ Cache: {dom}")
                     dados_bloco.append({"Domínio": dom, "Email": str(cache_dict[dom])})
                 else:
-                    status_texto.text(f"🌐 Investigando novo site: {dom}...")
+                    status_texto.text(f"🌐 Investigando (Turbo): {dom}...")
                     em = investigar_site(dom)
                     dados_bloco.append({"Domínio": dom, "Email": em})
                     novos_cac.append({"Dominio": dom, "Emails_Encontrados": em})
@@ -182,20 +214,19 @@ if st.session_state.running and alvos_total:
             
             barra_progresso.progress((i + 1) / len(bloco))
         
-        # Guardar progresso do Scrape
-        status_texto.text("💾 Guardando descobertas na Google Sheet...")
+        status_texto.text("💾 Sincronizando descobertas...")
         df_cac = salvar_cache_lote_gsheets(novos_cac, df_cac)
         
-        # ENVIOS
+        # FILTRO E DISPARO
         enviar_estes = [d for d in dados_bloco if d.get("Email") and "@" in str(d["Email"])]
         
         if enviar_estes:
-            status_texto.success(f"📨 Encontrados {len(enviar_estes)} emails válidos. Iniciando disparos...")
+            status_texto.success(f"📨 Iniciando {len(enviar_estes)} disparos...")
             for idx_e, item in enumerate(enviar_estes):
                 dest = str(item["Email"]).split(',')[0].strip()
                 emp = item["Domínio"].replace('www.','').split('.')[0].capitalize()
                 
-                status_texto.text(f"📧 Enviando para: {dest} ({item['Domínio']})")
+                status_texto.text(f"📧 Enviando para: {dest}")
                 
                 if validar_email_smtp(dest) == "✅":
                     try:
@@ -208,27 +239,24 @@ if st.session_state.running and alvos_total:
                         
                         df_env = salvar_envio_gsheets(item["Domínio"], dest, user_name, df_env)
                         st.toast(f"✅ Sucesso: {item['Domínio']}")
-                    except: 
-                        st.error(f"❌ Erro crítico no envio para {dest}")
+                    except: st.error(f"❌ Erro crítico em {dest}")
                 
-                # Pausa entre e-mails com contador visual
                 if idx_e < len(enviar_estes) - 1:
                     t_esp = random.randint(pausa_min, pausa_max)
                     for s in range(t_esp, 0, -1):
-                        status_texto.warning(f"⏳ Pausa de segurança: {s}s restantes antes do próximo envio...")
+                        status_texto.warning(f"⏳ Pausa estratégica: {s}s")
                         time.sleep(1)
         
-        # Atualiza o progresso da sessão
         st.session_state.bloco_atual = idx_b + 1
         
         if usar_pausa_bloco and idx_b < len(blocos) - 1:
             for s in range(int(tempo_bloco_seg), 0, -1):
-                status_texto.error(f"⏸️ Pausa entre BLOCOS: Retomando em {s}s...")
+                status_texto.error(f"⏸️ Pausa entre blocos: {s}s")
                 time.sleep(1)
             
         gc.collect()
 
     st.session_state.running = False
-    status_texto.success("🏁 TODA A CAMPANHA FOI CONCLUÍDA!")
+    status_texto.success("🏁 Campanha Turbo Finalizada!")
     st.balloons()
     
