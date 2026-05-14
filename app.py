@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
-st.set_page_config(page_title="GD Polyglot Turbo Pro", page_icon="🌐", layout="wide")
+st.set_page_config(page_title="GD Polyglot Stable Pro", page_icon="🌐", layout="wide")
 
 URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGSoefJ6-rtIwHHjabU/edit?usp=sharing"
 
@@ -88,7 +88,7 @@ def investigar_site(dominio):
                     links = page.query_selector_all("a")
                     for link in links:
                         href = link.get_attribute("href")
-                        if href and any(p in href.lower() for p in ['contact', 'contato', 'about', 'team', 'info', 'legal']):
+                        if href and any(p in href.lower() for p in ['contact', 'contato', 'about', 'team', 'info']):
                             target = href if href.startswith('http') else url.rstrip('/') + '/' + href.lstrip('/')
                             page.goto(target, timeout=20000); time.sleep(2)
                             emails_encontrados.update(extrair_e_limpar(page.content()))
@@ -111,17 +111,25 @@ def validar_email_smtp(email):
     except: return "❓"
 
 # ==========================================
-# 3. INTERFACE POLIGLOTA EXPANDIDA
+# 3. INTERFACE POLIGLOTA
 # ==========================================
 with st.sidebar:
     st.header("👤 Perfil GD")
     user_name = st.text_input("Teu Nome", value="Gonçalo")
     email_rem = st.text_input("Teu Email", value="goncalo@gd-advertising.com")
     pass_app = st.text_input("App Password", type="password")
+    
     st.divider()
-    pausa_min = st.number_input("Pausa E-mails Min", value=180)
-    pausa_max = st.number_input("Pausa E-mails Max", value=420)
-    tamanho_bloco = st.slider("Bloco", 10, 50, 30)
+    st.subheader("⏱️ Temporizadores")
+    pausa_min = st.number_input("Pausa E-mails Min (seg)", value=180)
+    pausa_max = st.number_input("Pausa E-mails Max (seg)", value=420)
+    
+    st.divider()
+    usar_pausa_bloco = st.toggle("Pausa entre Blocos", value=True)
+    tempo_bloco_seg = st.number_input("Segundos de Pausa", value=600)
+    
+    # --- AQUI ESTÁ A TUA MUDANÇA: VALOR EXATO ---
+    tamanho_bloco = st.number_input("Tamanho do Bloco (Ex: 30, 40, 100)", value=30, step=1, min_value=1)
 
 st.title("🌍 GD Advertising - International Turbo")
 
@@ -130,38 +138,31 @@ alvos_total = [l.strip() for l in txt.getvalue().decode("utf-8").split("\n") if 
 
 tabs = st.tabs(["🇺🇸 EN", "🇵🇹 PT", "🇪🇸 ES", "🇮🇹 IT", "🇫🇷 FR", "🇰🇷 KR", "🇯🇵 JP"])
 
-# Campos de input para cada língua
 def lang_inputs(tab, lang_code, def_subj, def_body):
     with tab:
-        subj = st.text_area(f"Assuntos {lang_code}", value=def_subj)
-        body = st.text_area(f"Mensagens {lang_code}", value=def_body)
+        subj = st.text_area(f"Assuntos {lang_code} (separa com [VARIANTE])", value=def_subj)
+        body = st.text_area(f"Mensagens {lang_code} (separa com [VARIANTE])", value=def_body)
         return subj, body
 
-sub_en, body_en = lang_inputs(tabs[0], "EN", "Partnership {empresa} [VARIANTE] Hi {empresa}", "Text EN... [VARIANTE] Hello...")
-sub_pt, body_pt = lang_inputs(tabs[1], "PT", "Parceria {empresa} [VARIANTE] Olá {empresa}", "Text PT... [VARIANTE] Bom dia...")
-sub_es, body_es = lang_inputs(tabs[2], "ES", "Alianza {empresa} [VARIANTE] Hola {empresa}", "Text ES... [VARIANTE] Saludos...")
-sub_it, body_it = lang_inputs(tabs[3], "IT", "Collaboração {empresa} [VARIANTE] Ciao {empresa}", "Text IT... [VARIANTE] Buongiorno...")
-sub_fr, body_fr = lang_inputs(tabs[4], "FR", "Partenariat {empresa} [VARIANTE] Bonjour {empresa}", "Text FR... [VARIANTE] Salut...")
-sub_kr, body_kr = lang_inputs(tabs[5], "KR", "{empresa} 파트너십 제안", "{empresa} 안녕하세요, {user}입니다...")
-sub_jp, body_jp = lang_inputs(tabs[6], "JP", "{empresa} との提携について", "{empresa} 様, 初めまして {user} と申します...")
+sub_en, body_en = lang_inputs(tabs[0], "EN", "Partnership with {empresa}", "Hi {empresa}...")
+sub_pt, body_pt = lang_inputs(tabs[1], "PT", "Parceria com a {empresa}", "Olá {empresa}...")
+sub_es, body_es = lang_inputs(tabs[2], "ES", "Alianza con {empresa}", "Hola {empresa}...")
+sub_it, body_it = lang_inputs(tabs[3], "IT", "Collaborazione {empresa}", "Ciao {empresa}...")
+sub_fr, body_fr = lang_inputs(tabs[4], "FR", "Partenariat {empresa}", "Bonjour {empresa}...")
+sub_kr, body_kr = lang_inputs(tabs[5], "KR", "{empresa} 파트너십", "{empresa} 안녕하세요...")
+sub_jp, body_jp = lang_inputs(tabs[6], "JP", "{empresa} との提携", "{empresa} 様...")
 
 # ==========================================
 # 4. LÓGICA DE DETECÇÃO E EXECUÇÃO
 # ==========================================
 def escolher_idioma(dominio):
     ext = dominio.split('.')[-1].lower()
-    mapping = {
-        'pt': 'PT', 'br': 'PT',
-        'es': 'ES', 'mx': 'ES', 'co': 'ES', 'cl': 'ES', 'ar': 'ES', 'pe': 'ES',
-        'it': 'IT',
-        'fr': 'FR',
-        'kr': 'KR',
-        'jp': 'JP'
-    }
+    mapping = {'pt':'PT','br':'PT','es':'ES','mx':'ES','co':'ES','it':'IT','fr':'FR','kr':'KR','jp':'JP'}
     return mapping.get(ext, 'EN')
 
-if st.button("🚀 INICIAR PIPELINE INTERNACIONAL", type="primary", use_container_width=True):
+if st.button("🚀 INICIAR PIPELINE FINAL", type="primary", use_container_width=True):
     st.session_state.running = True
+    st.session_state.bloco_atual = 0 # Reinicia se clicar de novo
 
 if st.session_state.running and alvos_total:
     mapa_idiomas = {
@@ -175,9 +176,11 @@ if st.session_state.running and alvos_total:
     }
     
     blocos = [alvos_total[i:i + tamanho_bloco] for i in range(0, len(alvos_total), tamanho_bloco)]
+    
     for idx_b in range(st.session_state.bloco_atual, len(blocos)):
         bloco = blocos[idx_b]
-        st.subheader(f"📦 Bloco {idx_b + 1} de {len(blocos)}")
+        st.markdown(f"### 📦 Bloco {idx_b + 1} de {len(blocos)} (Tamanho: {len(bloco)})")
+        
         df_env, df_cac = get_db_data()
         cache_dict = dict(zip(df_cac['Dominio'], df_cac['Emails_Encontrados']))
         
@@ -186,8 +189,10 @@ if st.session_state.running and alvos_total:
         barra_prog = st.progress(0); status_txt = st.empty()
         
         for i, dom in enumerate(bloco):
-            if not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values:
-                status_txt.warning(f"⏭️ {dom} já enviado.")
+            ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
+            
+            if ja_enviado:
+                status_txt.warning(f"⏭️ {dom} já enviado anteriormente por ti. Ignorando...")
             else:
                 if dom in cache_dict:
                     status_txt.info(f"⚡ Cache: {dom}")
@@ -213,13 +218,16 @@ if st.session_state.running and alvos_total:
             esc_corpo = random.choice(mapa_idiomas[idioma]["corpos"]).strip().format(empresa=emp, user=user_name)
             
             status_txt.text(f"📧 [{idioma}] Enviando para: {dest}")
+            
             if validar_email_smtp(dest) == "✅":
                 try:
                     msg = MIMEMultipart(); msg['From'] = email_rem; msg['To'] = dest
                     msg['Subject'] = esc_assunto
                     msg.attach(MIMEText(esc_corpo, 'plain'))
+                    
                     server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
                     server.login(email_rem, pass_app); server.sendmail(email_rem, [dest, "goncalo.dias@g13advertising.com"], msg.as_string()); server.quit()
+                    
                     df_env = salvar_envio_gsheets(dom, dest, user_name, df_env)
                     st.toast(f"✅ Sucesso ({idioma}): {dom}")
                 except Exception as e: st.error(f"❌ Erro: {e}")
@@ -231,7 +239,14 @@ if st.session_state.running and alvos_total:
                     time.sleep(1)
         
         st.session_state.bloco_atual = idx_b + 1
+        
+        if usar_pausa_bloco and idx_b < len(blocos) - 1:
+            for s in range(int(tempo_bloco_seg), 0, -1):
+                status_txt.error(f"⏸️ Pausa entre Blocos: {s}s")
+                time.sleep(1)
+            
         gc.collect()
 
     st.session_state.running = False
     st.balloons()
+    
