@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
-st.set_page_config(page_title="GD Polyglot Stable Pro", page_icon="🌐", layout="wide")
+st.set_page_config(page_title="GD Advertising - Control Center", page_icon="🖥️", layout="wide")
 
 URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGSoefJ6-rtIwHHjabU/edit?usp=sharing"
 
@@ -71,10 +71,6 @@ def investigar_site(dominio):
     emails_encontrados = set()
     regex_padrao = r'[a-zA-Z0-9_.+-]+(?:\s?\[at\]\s?|\s?\(at\)\s?|@)[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
 
-    def extrair_e_limpar(html_content):
-        raw = re.findall(regex_padrao, html_content)
-        return [e.replace('[at]', '@').replace('(at)', '@').replace(' ', '').lower() for e in raw if "@" in e or "[at]" in e or "(at)" in e]
-
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--single-process"])
@@ -83,15 +79,18 @@ def investigar_site(dominio):
             try:
                 page.goto(url, timeout=25000, wait_until="domcontentloaded")
                 time.sleep(2)
-                emails_encontrados.update(extrair_e_limpar(page.content()))
+                raw = re.findall(regex_padrao, page.content())
+                emails_encontrados.update([e.replace('[at]', '@').replace('(at)', '@').replace(' ', '').lower() for e in raw])
+                
                 if not emails_encontrados:
                     links = page.query_selector_all("a")
                     for link in links:
                         href = link.get_attribute("href")
-                        if href and any(p in href.lower() for p in ['contact', 'contato', 'about', 'team', 'info']):
+                        if href and any(p in href.lower() for p in ['contact', 'contato', 'about', 'team']):
                             target = href if href.startswith('http') else url.rstrip('/') + '/' + href.lstrip('/')
                             page.goto(target, timeout=20000); time.sleep(2)
-                            emails_encontrados.update(extrair_e_limpar(page.content()))
+                            raw_sub = re.findall(regex_padrao, page.content())
+                            emails_encontrados.update([e.replace('[at]', '@').replace('(at)', '@').replace(' ', '').lower() for e in raw_sub])
                             break
             except: pass
             browser.close()
@@ -111,58 +110,51 @@ def validar_email_smtp(email):
     except: return "❓"
 
 # ==========================================
-# 3. INTERFACE POLIGLOTA
+# 3. INTERFACE
 # ==========================================
 with st.sidebar:
     st.header("👤 Perfil GD")
     user_name = st.text_input("Teu Nome", value="Gonçalo")
     email_rem = st.text_input("Teu Email", value="goncalo@gd-advertising.com")
     pass_app = st.text_input("App Password", type="password")
-    
     st.divider()
-    st.subheader("⏱️ Temporizadores")
     pausa_min = st.number_input("Pausa E-mails Min (seg)", value=180)
     pausa_max = st.number_input("Pausa E-mails Max (seg)", value=420)
-    
     st.divider()
     usar_pausa_bloco = st.toggle("Pausa entre Blocos", value=True)
     tempo_bloco_seg = st.number_input("Segundos de Pausa", value=600)
-    
-    # --- AQUI ESTÁ A TUA MUDANÇA: VALOR EXATO ---
-    tamanho_bloco = st.number_input("Tamanho do Bloco (Ex: 30, 40, 100)", value=30, step=1, min_value=1)
+    tamanho_bloco = st.number_input("Tamanho do Bloco", value=30, min_value=1)
 
-st.title("🌍 GD Advertising - International Turbo")
+st.title("🖥️ GD Advertising - Control Center")
 
 txt = st.file_uploader("Upload domínios (.txt)", type=['txt'])
 alvos_total = [l.strip() for l in txt.getvalue().decode("utf-8").split("\n") if l.strip()] if txt else []
 
 tabs = st.tabs(["🇺🇸 EN", "🇵🇹 PT", "🇪🇸 ES", "🇮🇹 IT", "🇫🇷 FR", "🇰🇷 KR", "🇯🇵 JP"])
-
-def lang_inputs(tab, lang_code, def_subj, def_body):
+def lang_inputs(tab, lang_code):
     with tab:
-        subj = st.text_area(f"Assuntos {lang_code} (separa com [VARIANTE])", value=def_subj)
-        body = st.text_area(f"Mensagens {lang_code} (separa com [VARIANTE])", value=def_body)
+        subj = st.text_area(f"Assuntos {lang_code}", value=f"Partnership with {{empresa}}")
+        body = st.text_area(f"Mensagens {lang_code}", value=f"Hi {{empresa}}, I'm {{user}}...")
         return subj, body
 
-sub_en, body_en = lang_inputs(tabs[0], "EN", "Partnership with {empresa}", "Hi {empresa}...")
-sub_pt, body_pt = lang_inputs(tabs[1], "PT", "Parceria com a {empresa}", "Olá {empresa}...")
-sub_es, body_es = lang_inputs(tabs[2], "ES", "Alianza con {empresa}", "Hola {empresa}...")
-sub_it, body_it = lang_inputs(tabs[3], "IT", "Collaborazione {empresa}", "Ciao {empresa}...")
-sub_fr, body_fr = lang_inputs(tabs[4], "FR", "Partenariat {empresa}", "Bonjour {empresa}...")
-sub_kr, body_kr = lang_inputs(tabs[5], "KR", "{empresa} 파트너십", "{empresa} 안녕하세요...")
-sub_jp, body_jp = lang_inputs(tabs[6], "JP", "{empresa} との提携", "{empresa} 様...")
+sub_en, body_en = lang_inputs(tabs[0], "EN")
+sub_pt, body_pt = lang_inputs(tabs[1], "PT")
+sub_es, body_es = lang_inputs(tabs[2], "ES")
+sub_it, body_it = lang_inputs(tabs[3], "IT")
+sub_fr, body_fr = lang_inputs(tabs[4], "FR")
+sub_kr, body_kr = lang_inputs(tabs[5], "KR")
+sub_jp, body_jp = lang_inputs(tabs[6], "JP")
 
 # ==========================================
-# 4. LÓGICA DE DETECÇÃO E EXECUÇÃO
+# 4. EXECUÇÃO COM LOGS DETALHADOS
 # ==========================================
 def escolher_idioma(dominio):
     ext = dominio.split('.')[-1].lower()
     mapping = {'pt':'PT','br':'PT','es':'ES','mx':'ES','co':'ES','it':'IT','fr':'FR','kr':'KR','jp':'JP'}
     return mapping.get(ext, 'EN')
 
-if st.button("🚀 INICIAR PIPELINE FINAL", type="primary", use_container_width=True):
+if st.button("🚀 INICIAR PIPELINE", type="primary", use_container_width=True):
     st.session_state.running = True
-    st.session_state.bloco_atual = 0 # Reinicia se clicar de novo
 
 if st.session_state.running and alvos_total:
     mapa_idiomas = {
@@ -179,71 +171,94 @@ if st.session_state.running and alvos_total:
     
     for idx_b in range(st.session_state.bloco_atual, len(blocos)):
         bloco = blocos[idx_b]
-        st.markdown(f"### 📦 Bloco {idx_b + 1} de {len(blocos)} (Tamanho: {len(bloco)})")
+        st.markdown(f"--- \n### 📦 BLOCO {idx_b + 1} / {len(blocos)}")
         
         df_env, df_cac = get_db_data()
         cache_dict = dict(zip(df_cac['Dominio'], df_cac['Emails_Encontrados']))
         
         dados_bloco = []
         novos_cac = []
-        barra_prog = st.progress(0); status_txt = st.empty()
         
+        # UI DE PROGRESSO DO BLOCO
+        barra_prog = st.progress(0)
+        status_txt = st.empty()
+        
+        # --- FASE 1: INVESTIGAÇÃO ---
         for i, dom in enumerate(bloco):
+            posicao = f"({i+1}/{len(bloco)})"
             ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
             
             if ja_enviado:
-                status_txt.warning(f"⏭️ {dom} já enviado anteriormente por ti. Ignorando...")
+                status_txt.warning(f"⏭️ {posicao} Ignorado: {dom} (Já enviado anteriormente)")
             else:
                 if dom in cache_dict:
-                    status_txt.info(f"⚡ Cache: {dom}")
-                    dados_bloco.append({"Domínio": dom, "Email": str(cache_dict[dom])})
+                    email_cache = str(cache_dict[dom])
+                    status_txt.info(f"⚡ {posicao} Recuperado do Cache: {dom} ⮕ {email_cache}")
+                    dados_bloco.append({"Domínio": dom, "Email": email_cache})
                 else:
-                    status_txt.text(f"🌐 Investigando: {dom}...")
+                    status_txt.text(f"🌐 {posicao} Scrapping Ativo: {dom}...")
                     em = investigar_site(dom)
+                    status_txt.success(f"🔍 {posicao} Resultado do Scrape: {dom} ⮕ {em}")
                     dados_bloco.append({"Domínio": dom, "Email": em})
                     novos_cac.append({"Dominio": dom, "Emails_Encontrados": em})
                     cache_dict[dom] = em
+            
             barra_prog.progress((i + 1) / len(bloco))
-        
+            time.sleep(0.1) # Breve pausa para UI respirar
+
+        # Sincronização
+        status_txt.text("💾 Sincronizando novas descobertas com a Google Sheet...")
         df_cac = salvar_cache_lote_gsheets(novos_cac, df_cac)
+        
+        # --- FASE 2: ENVIOS ---
         enviar_estes = [d for d in dados_bloco if d.get("Email") and "@" in str(d["Email"])]
         
-        for idx_e, item in enumerate(enviar_estes):
-            dest = str(item["Email"]).split(',')[0].strip()
-            dom = item["Domínio"]
-            emp = dom.replace('www.','').split('.')[0].capitalize()
-            
-            idioma = escolher_idioma(dom)
-            esc_assunto = random.choice(mapa_idiomas[idioma]["assuntos"]).strip().format(empresa=emp, user=user_name)
-            esc_corpo = random.choice(mapa_idiomas[idioma]["corpos"]).strip().format(empresa=emp, user=user_name)
-            
-            status_txt.text(f"📧 [{idioma}] Enviando para: {dest}")
-            
-            if validar_email_smtp(dest) == "✅":
-                try:
-                    msg = MIMEMultipart(); msg['From'] = email_rem; msg['To'] = dest
-                    msg['Subject'] = esc_assunto
-                    msg.attach(MIMEText(esc_corpo, 'plain'))
-                    
-                    server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
-                    server.login(email_rem, pass_app); server.sendmail(email_rem, [dest, "goncalo.dias@g13advertising.com"], msg.as_string()); server.quit()
-                    
-                    df_env = salvar_envio_gsheets(dom, dest, user_name, df_env)
-                    st.toast(f"✅ Sucesso ({idioma}): {dom}")
-                except Exception as e: st.error(f"❌ Erro: {e}")
-            
-            if idx_e < len(enviar_estes) - 1:
-                t_esp = random.randint(pausa_min, pausa_max)
-                for s in range(t_esp, 0, -1):
-                    status_txt.warning(f"⏳ Pausa {idioma}: {s}s")
-                    time.sleep(1)
+        if enviar_estes:
+            st.markdown(f"**📧 Iniciando disparos para {len(enviar_estes)} e-mails encontrados no bloco...**")
+            for idx_e, item in enumerate(enviar_estes):
+                pos_envio = f"({idx_e+1}/{len(enviar_estes)})"
+                dest = str(item["Email"]).split(',')[0].strip()
+                dom = item["Domínio"]
+                emp = dom.replace('www.','').split('.')[0].capitalize()
+                
+                idioma = escolher_idioma(dom)
+                esc_assunto = random.choice(mapa_idiomas[idioma]["assuntos"]).strip().format(empresa=emp, user=user_name)
+                esc_corpo = random.choice(mapa_idiomas[idioma]["corpos"]).strip().format(empresa=emp, user=user_name)
+                
+                status_txt.text(f"📧 {pos_envio} Validando e Enviando: {dest} [{idioma}]...")
+                
+                if validar_email_smtp(dest) == "✅":
+                    try:
+                        msg = MIMEMultipart(); msg['From'] = email_rem; msg['To'] = dest
+                        msg['Subject'] = esc_assunto
+                        msg.attach(MIMEText(esc_corpo, 'plain'))
+                        
+                        server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
+                        server.login(email_rem, pass_app); server.sendmail(email_rem, [dest, "goncalo.dias@g13advertising.com"], msg.as_string()); server.quit()
+                        
+                        df_env = salvar_envio_gsheets(dom, dest, user_name, df_env)
+                        st.success(f"✅ {pos_envio} Sucesso: {dom} (E-mail: {dest})")
+                    except Exception as e: 
+                        st.error(f"❌ {pos_envio} Falha no envio para {dest}: {e}")
+                else:
+                    st.warning(f"⚠️ {pos_envio} Saltado: {dest} parece ser um e-mail inválido ou inexistente.")
+
+                # Pausa Anti-Spam
+                if idx_e < len(enviar_estes) - 1:
+                    t_esp = random.randint(pausa_min, pausa_max)
+                    for s in range(t_esp, 0, -1):
+                        status_txt.warning(f"⏳ Pausa Anti-Spam {pos_envio}: {s}s para o próximo e-mail...")
+                        time.sleep(1)
         
         st.session_state.bloco_atual = idx_b + 1
         
+        # Pausa entre Blocos
         if usar_pausa_bloco and idx_b < len(blocos) - 1:
+            st.error(f"⏸️ BLOCO {idx_b+1} FINALIZADO. Entrando em pausa estratégica...")
             for s in range(int(tempo_bloco_seg), 0, -1):
-                status_txt.error(f"⏸️ Pausa entre Blocos: {s}s")
+                status_txt.metric("Retomando Pipeline em:", f"{s}s", f"Bloco Seguinte: {idx_b+2}")
                 time.sleep(1)
+            status_txt.empty()
             
         gc.collect()
 
