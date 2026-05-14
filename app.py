@@ -25,13 +25,12 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
-st.set_page_config(page_title="GD Stable Pro", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="GD Stable Pro + Logs", page_icon="🛡️", layout="wide")
 
-# URL DA TUA BASE DE DADOS
 URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGSoefJ6-rtIwHHjabU/edit?usp=sharing"
 
 # ==========================================
-# 1. PERSISTÊNCIA DE SESSÃO (ANTI-REFRESH)
+# 1. PERSISTÊNCIA DE SESSÃO
 # ==========================================
 if 'running' not in st.session_state:
     st.session_state.running = False
@@ -72,18 +71,16 @@ def salvar_cache_lote_gsheets(lista_novos_caches, df_atual):
         return df_atual
 
 # ==========================================
-# 3. MOTOR DE SCRAPE (OTIMIZADO)
+# 3. MOTOR DE INVESTIGAÇÃO
 # ==========================================
 def investigar_site(dominio):
     url = 'https://' + dominio if not dominio.startswith('http') else dominio
     resultado = "N/A"
     try:
         with sync_playwright() as p:
-            # Lançamento ultra-leve para não estoirar a RAM da Cloud
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--single-process"])
             page = browser.new_page(user_agent="Mozilla/5.0")
             page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
-            
             try:
                 page.goto(url, timeout=25000, wait_until="commit")
                 time.sleep(2)
@@ -142,7 +139,7 @@ with col_msg2:
     corpo_t = st.text_area("Mensagem", value="Hello {empresa}, I'm {user}...")
 
 # ==========================================
-# 5. EXECUÇÃO CASCATA COM SESSION STATE
+# 5. EXECUÇÃO CASCATA
 # ==========================================
 if st.button("🚀 INICIAR PIPELINE", type="primary"):
     st.session_state.running = True
@@ -152,7 +149,7 @@ if st.session_state.running and alvos_total:
     
     for idx_b in range(st.session_state.bloco_atual, len(blocos)):
         bloco = blocos[idx_b]
-        st.subheader(f"📦 Bloco {idx_b + 1} de {len(blocos)}")
+        st.markdown(f"### 📦 Processando Bloco {idx_b + 1} de {len(blocos)}")
         
         # Sincronizar dados
         df_env, df_cac = get_db_data()
@@ -160,64 +157,78 @@ if st.session_state.running and alvos_total:
         
         dados_bloco = []
         novos_cac = []
-        p_scrape = st.progress(0)
+        
+        # --- UI DE STATUS ---
+        barra_progresso = st.progress(0)
+        status_texto = st.empty() # AQUI É O LOG EM TEMPO REAL
         
         # SCRAPE
         for i, dom in enumerate(bloco):
+            # Verificar se já enviado por mim
             ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
+            
             if ja_enviado:
-                st.write(f"⏭️ {dom} já enviado.")
+                status_texto.warning(f"⏭️ {dom} já enviado anteriormente. Ignorando...")
             else:
                 if dom in cache_dict:
+                    status_texto.info(f"⚡ Recuperado do Cache: {dom}")
                     dados_bloco.append({"Domínio": dom, "Email": str(cache_dict[dom])})
                 else:
+                    status_texto.text(f"🌐 Investigando novo site: {dom}...")
                     em = investigar_site(dom)
                     dados_bloco.append({"Domínio": dom, "Email": em})
                     novos_cac.append({"Dominio": dom, "Emails_Encontrados": em})
                     cache_dict[dom] = em
-            p_scrape.progress((i + 1) / len(bloco))
+            
+            barra_progresso.progress((i + 1) / len(bloco))
         
-        # Salva Cache
+        # Guardar progresso do Scrape
+        status_texto.text("💾 Guardando descobertas na Google Sheet...")
         df_cac = salvar_cache_lote_gsheets(novos_cac, df_cac)
         
         # ENVIOS
         enviar_estes = [d for d in dados_bloco if d.get("Email") and "@" in str(d["Email"])]
-        for idx_e, item in enumerate(enviar_estes):
-            dest = str(item["Email"]).split(',')[0].strip()
-            emp = item["Domínio"].replace('www.','').split('.')[0].capitalize()
-            
-            if validar_email_smtp(dest) == "✅":
-                try:
-                    msg = MIMEMultipart(); msg['From'] = email_rem; msg['To'] = dest
-                    msg['Subject'] = assunto_t.format(empresa=emp)
-                    msg.attach(MIMEText(corpo_t.format(empresa=emp, user=user_name), 'plain'))
-                    
-                    server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
-                    server.login(email_rem, pass_app); server.sendmail(email_rem, [dest], msg.as_string()); server.quit()
-                    
-                    df_env = salvar_envio_gsheets(item["Domínio"], dest, user_name, df_env)
-                    st.success(f"✅ Enviado: {item['Domínio']}")
-                except: st.error(f"❌ Erro em {dest}")
-            
-            if idx_e < len(enviar_estes) - 1:
-                t_esp = random.randint(pausa_min, pausa_max)
-                t_ui = st.empty()
-                for s in range(t_esp, 0, -1):
-                    t_ui.metric("Próximo envio em:", f"{s}s", f"Bloco {idx_b+1}")
-                    time.sleep(1)
-                t_ui.empty()
+        
+        if enviar_estes:
+            status_texto.success(f"📨 Encontrados {len(enviar_estes)} emails válidos. Iniciando disparos...")
+            for idx_e, item in enumerate(enviar_estes):
+                dest = str(item["Email"]).split(',')[0].strip()
+                emp = item["Domínio"].replace('www.','').split('.')[0].capitalize()
+                
+                status_texto.text(f"📧 Enviando para: {dest} ({item['Domínio']})")
+                
+                if validar_email_smtp(dest) == "✅":
+                    try:
+                        msg = MIMEMultipart(); msg['From'] = email_rem; msg['To'] = dest
+                        msg['Subject'] = assunto_t.format(empresa=emp)
+                        msg.attach(MIMEText(corpo_t.format(empresa=emp, user=user_name), 'plain'))
+                        
+                        server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
+                        server.login(email_rem, pass_app); server.sendmail(email_rem, [dest], msg.as_string()); server.quit()
+                        
+                        df_env = salvar_envio_gsheets(item["Domínio"], dest, user_name, df_env)
+                        st.toast(f"✅ Sucesso: {item['Domínio']}")
+                    except: 
+                        st.error(f"❌ Erro crítico no envio para {dest}")
+                
+                # Pausa entre e-mails com contador visual
+                if idx_e < len(enviar_estes) - 1:
+                    t_esp = random.randint(pausa_min, pausa_max)
+                    for s in range(t_esp, 0, -1):
+                        status_texto.warning(f"⏳ Pausa de segurança: {s}s restantes antes do próximo envio...")
+                        time.sleep(1)
         
         # Atualiza o progresso da sessão
         st.session_state.bloco_atual = idx_b + 1
         
         if usar_pausa_bloco and idx_b < len(blocos) - 1:
-            t_b = st.empty()
             for s in range(int(tempo_bloco_seg), 0, -1):
-                t_b.metric("Pausa entre blocos:", f"{s}s", "Resfriando...")
+                status_texto.error(f"⏸️ Pausa entre BLOCOS: Retomando em {s}s...")
                 time.sleep(1)
-            t_b.empty()
             
         gc.collect()
 
     st.session_state.running = False
+    status_texto.success("🏁 TODA A CAMPANHA FOI CONCLUÍDA!")
     st.balloons()
+    
