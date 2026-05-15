@@ -25,8 +25,8 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
-# --- VERSÃO 23 ---
-st.set_page_config(page_title="GD Control Center - v23", page_icon="🖥️", layout="wide")
+# --- VERSÃO 25 ---
+st.set_page_config(page_title="GD Control Center - Final", page_icon="🖥️", layout="wide")
 
 URL_FOLHA = "https://docs.google.com/spreadsheets/d/1Yq3Vo-yaNrSyBkVLxETB6nNrqGSoefJ6-rtIwHHjabU/edit?usp=sharing"
 
@@ -122,6 +122,10 @@ with st.sidebar:
     email_bcc = st.text_input("BCC (Cópia Oculta)", value="goncalo.dias@g13advertising.com")
     
     st.divider()
+    # --- BOTÃO DE REENVIO ADICIONADO AQUI ---
+    permitir_reenvio = st.toggle("🔄 Permitir Reenvio (Ignorar Histórico)", value=False)
+    
+    st.divider()
     pausa_min = st.number_input("Pausa E-mails Min (seg)", value=180)
     pausa_max = st.number_input("Pausa E-mails Max (seg)", value=420)
     st.divider()
@@ -129,32 +133,52 @@ with st.sidebar:
     tempo_bloco_seg = st.number_input("Segundos de Pausa", value=600)
     tamanho_bloco = st.number_input("Tamanho do Bloco", value=30, min_value=1)
 
-st.title("🖥️ GD Advertising - Control Center (v23)")
+st.title("🖥️ GD Advertising - Control Center (Final)")
 
 txt = st.file_uploader("Upload domínios (.txt)", type=['txt'])
 alvos_total = [l.strip() for l in txt.getvalue().decode("utf-8").split("\n") if l.strip()] if txt else []
 
 tabs = st.tabs(["🇺🇸 EN", "🇵🇹 PT", "🇪🇸 ES", "🇮🇹 IT", "🇫🇷 FR", "🇰🇷 KR", "🇯🇵 JP"])
 
-# --- LÓGICA DE ATIVAÇÃO DE IDIOMAS ---
+# --- LÓGICA DE ATIVAÇÃO DE IDIOMAS E VARIANTES ---
 idiomas_ativos = {}
 
-def lang_inputs(tab, lang_code):
+def lang_inputs(tab, lang_code, def_subj, def_body):
     with tab:
         ativo = st.checkbox(f"Ativar idioma {lang_code}", value=True)
-        subj = st.text_area(f"Assuntos {lang_code}", value=f"Partnership with {{empresa}}", disabled=not ativo)
-        body = st.text_area(f"Mensagens {lang_code}", value=f"Hi {{empresa}}, I'm {{user}}...", disabled=not ativo)
         if ativo:
             idiomas_ativos[lang_code] = True
-        return subj, body
+            
+        st.markdown("📝 **Variante 1 (Principal)**")
+        s1 = st.text_input(f"Assunto 1 ({lang_code})", value=def_subj, disabled=not ativo)
+        b1 = st.text_area(f"Mensagem 1 ({lang_code})", value=def_body, disabled=not ativo, height=120)
+        
+        with st.expander("➕ Adicionar Variante 2 (Anti-Spam)"):
+            s2 = st.text_input(f"Assunto 2 ({lang_code})", value="", disabled=not ativo)
+            b2 = st.text_area(f"Mensagem 2 ({lang_code})", value="", disabled=not ativo, height=120)
+            
+        with st.expander("➕ Adicionar Variante 3 (Anti-Spam)"):
+            s3 = st.text_input(f"Assunto 3 ({lang_code})", value="", disabled=not ativo)
+            b3 = st.text_area(f"Mensagem 3 ({lang_code})", value="", disabled=not ativo, height=120)
+            
+        # Filtra apenas as variantes que foram preenchidas
+        assuntos = [s for s in [s1, s2, s3] if s.strip()]
+        corpos = [b for b in [b1, b2, b3] if b.strip()]
+        
+        # Fallback de segurança se apagar tudo
+        if not assuntos: assuntos = [def_subj]
+        if not corpos: corpos = [def_body]
+        
+        return assuntos, corpos
 
-sub_en, body_en = lang_inputs(tabs[0], "EN")
-sub_pt, body_pt = lang_inputs(tabs[1], "PT")
-sub_es, body_es = lang_inputs(tabs[2], "ES")
-sub_it, body_it = lang_inputs(tabs[3], "IT")
-sub_fr, body_fr = lang_inputs(tabs[4], "FR")
-sub_kr, body_kr = lang_inputs(tabs[5], "KR")
-sub_jp, body_jp = lang_inputs(tabs[6], "JP")
+# Inicializar abas com CAIXAS DISTINTAS
+sub_en, body_en = lang_inputs(tabs[0], "EN", "Partnership with {empresa}", "Hi {empresa}, I'm {user}...")
+sub_pt, body_pt = lang_inputs(tabs[1], "PT", "Parceria com a {empresa}", "Olá {empresa}, sou o {user}...")
+sub_es, body_es = lang_inputs(tabs[2], "ES", "Alianza con {empresa}", "Hola {empresa}, soy {user}...")
+sub_it, body_it = lang_inputs(tabs[3], "IT", "Collaborazione con {empresa}", "Ciao {empresa}, sono {user}...")
+sub_fr, body_fr = lang_inputs(tabs[4], "FR", "Partenariat avec {empresa}", "Bonjour {empresa}, je suis {user}...")
+sub_kr, body_kr = lang_inputs(tabs[5], "KR", "{empresa} 파트너십 제안", "{empresa} 안녕하세요, {user}입니다...")
+sub_jp, body_jp = lang_inputs(tabs[6], "JP", "{empresa} との提携について", "{empresa} 様, 初めまして {user} と申します...")
 
 # ==========================================
 # 4. EXECUÇÃO COM LOGS DETALHADOS E FALLBACK
@@ -164,18 +188,18 @@ def escolher_idioma(dominio):
     mapping = {'pt':'PT','br':'PT','es':'ES','mx':'ES','co':'ES','it':'IT','fr':'FR','kr':'KR','jp':'JP'}
     return mapping.get(ext, 'EN')
 
-if st.button("🚀 INICIAR PIPELINE (v23)", type="primary", use_container_width=True):
+if st.button("🚀 INICIAR PIPELINE FINAL", type="primary", use_container_width=True):
     st.session_state.running = True
 
 if st.session_state.running and alvos_total:
     mapa_idiomas = {
-        "EN": {"assuntos": sub_en.split("[VARIANTE]"), "corpos": body_en.split("[VARIANTE]")},
-        "PT": {"assuntos": sub_pt.split("[VARIANTE]"), "corpos": body_pt.split("[VARIANTE]")},
-        "ES": {"assuntos": sub_es.split("[VARIANTE]"), "corpos": body_es.split("[VARIANTE]")},
-        "IT": {"assuntos": sub_it.split("[VARIANTE]"), "corpos": body_it.split("[VARIANTE]")},
-        "FR": {"assuntos": sub_fr.split("[VARIANTE]"), "corpos": body_fr.split("[VARIANTE]")},
-        "KR": {"assuntos": sub_kr.split("[VARIANTE]"), "corpos": body_kr.split("[VARIANTE]")},
-        "JP": {"assuntos": sub_jp.split("[VARIANTE]"), "corpos": body_jp.split("[VARIANTE]")}
+        "EN": {"assuntos": sub_en, "corpos": body_en},
+        "PT": {"assuntos": sub_pt, "corpos": body_pt},
+        "ES": {"assuntos": sub_es, "corpos": body_es},
+        "IT": {"assuntos": sub_it, "corpos": body_it},
+        "FR": {"assuntos": sub_fr, "corpos": body_fr},
+        "KR": {"assuntos": sub_kr, "corpos": body_kr},
+        "JP": {"assuntos": sub_jp, "corpos": body_jp}
     }
     
     blocos = [alvos_total[i:i + tamanho_bloco] for i in range(0, len(alvos_total), tamanho_bloco)]
@@ -202,7 +226,11 @@ if st.session_state.running and alvos_total:
                 status_txt.error("⚠️ Nenhum idioma selecionado! Cancela a operação ou seleciona pelo menos um.")
                 break
 
-            ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
+            # LÓGICA DE REENVIO / HISTÓRICO
+            if permitir_reenvio:
+                ja_enviado = False
+            else:
+                ja_enviado = not df_env.empty and dom in df_env[df_env['Enviado_Por'] == user_name]['Dominio'].values
             
             if ja_enviado:
                 status_txt.warning(f"⏭️ {posicao} Ignorado: {dom} (Já enviado anteriormente)")
@@ -225,7 +253,7 @@ if st.session_state.running and alvos_total:
         status_txt.text("💾 Sincronizando descobertas com a Google Sheet...")
         df_cac = salvar_cache_lote_gsheets(novos_cac, df_cac)
         
-        # --- FASE 2: ENVIOS COM LÓGICA FALLBACK ---
+        # --- FASE 2: ENVIOS COM LÓGICA FALLBACK E VARIANTES ---
         enviar_estes = [d for d in dados_bloco if d.get("Email") and "@" in str(d["Email"])]
         
         if enviar_estes:
@@ -242,6 +270,8 @@ if st.session_state.running and alvos_total:
                 if len(idiomas_sel) == 1:
                     # Regra 1: Só 1 idioma ativo -> Força esse idioma
                     idioma = idiomas_sel[0]
+                    
+                    # Usa a lista das Variantes de forma aleatória
                     esc_assunto = random.choice(mapa_idiomas[idioma]["assuntos"]).strip().format(empresa=emp, user=user_name)
                     esc_corpo = random.choice(mapa_idiomas[idioma]["corpos"]).strip().format(empresa=emp, user=user_name)
                     tag_idioma = idioma
@@ -318,3 +348,4 @@ Media Buyer | Clever Advertising"""
 
     st.session_state.running = False
     st.balloons()
+    
